@@ -1,11 +1,11 @@
 #!/bin/bash
 #SBATCH --account=torch_pr_37_lpinto
-#SBATCH --partition=h200_courant
+#SBATCH --partition=l40s_courant
 #SBATCH --job-name=iws-airhockey-s2
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=1
+#SBATCH --ntasks-per-node=4
 #SBATCH --cpus-per-task=8
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:4
 #SBATCH --mem=128G
 #SBATCH --time=48:00:00
 #SBATCH --requeue
@@ -13,7 +13,11 @@
 #SBATCH --error=logs/airhockey_s2_%j.err
 #SBATCH --signal=B:USR1@180
 #
-# Stage 2 (dynamics) for the airhockey-1m world model on H200.
+# Stage 2 (dynamics) for the airhockey-1m world model on 4x L40S (DDP).
+# One srun task per GPU (--ntasks-per-node=4); Lightning auto-selects
+# DDPStrategy and reads rank/world-size from the SLURM env. Effective batch =
+# batch_size(16) x num_devices(4) = 64, matching the single-H200 recipe.
+# L40S has ~48 GB (vs the H200's ~141 GB), so per-GPU batch is 16, not 64.
 # Runs independently of stage 1 — snapshots the latest S1 checkpoint at job
 # start. Safe to run in parallel with a still-going S1 job.
 #
@@ -74,9 +78,15 @@ requeue_self() {
 trap requeue_self USR1
 
 # ---------- apptainer runner ----------
+# srun launches one task per GPU (--ntasks-per-node=4). Each task runs its own
+# apptainer+python; Lightning's SLURMEnvironment reads SLURM_PROCID/NTASKS
+# (passed through into the container) to form the DDP process group. All 4 GPUs
+# must be visible to every task for Lightning's local-rank device pick — add
+# `--gpu-bind=none` to the srun line below if the cluster instead binds one GPU
+# per task (symptom: a CUDA "invalid device ordinal" error on ranks 1-3).
 run_train() {
   local cmd="$1"
-  apptainer exec --nv \
+  srun apptainer exec --nv \
     --overlay "$OVERLAY:ro" \
     --bind /scratch/$USER:/scratch/$USER \
     "$IMAGE" \
@@ -167,7 +177,8 @@ if [[ ! -f $S2_DONE ]]; then
     dataset.horizon=5 dataset.val_horizon=200 \
     dataset.obs_keys=[top_pov] \
     hydra.run.dir=$S2_DIR \
-    experiment.training.batch_size=64 \
+    experiment.num_devices=4 \
+    experiment.training.batch_size=16 \
     experiment.training.max_steps=1000005 \
     experiment.training.log_every_n_steps=100 \
     experiment.training.checkpointing.every_n_train_steps=10000 \
