@@ -15,6 +15,7 @@ from torch.optim.lr_scheduler import LinearLR, ReduceLROnPlateau
 # import matplotlib.pyplot as plt
 from interactive_world_sim.algorithms.common.base_pytorch_algo import BasePytorchAlgo
 from interactive_world_sim.algorithms.common.diffusion_helper import render_img_cm
+from interactive_world_sim.algorithms.latent_dynamics.latent_norm import LatentNorm
 from interactive_world_sim.algorithms.common.metrics import (
     FrechetInceptionDistance,
     FrechetVideoDistance,
@@ -41,6 +42,10 @@ class LatentWorldModel(BasePytorchAlgo):
         self.training_stage = cfg.training_stage
         assert self.training_stage in [1, 2, 3], "Invalid training stage"
         self.load_ae = cfg.load_ae if "load_ae" in cfg else None
+        self.latent_norm_mode = cfg.latent_norm if "latent_norm" in cfg else "l2"
+        self.latent_norm_rescale = (
+            cfg.latent_norm_rescale if "latent_norm_rescale" in cfg else True
+        )
         super().__init__(cfg)
         self.normalizer = LinearNormalizer()
         self.validation_step_outputs: list = []
@@ -116,6 +121,13 @@ class LatentWorldModel(BasePytorchAlgo):
                 ]
             )
         self.encoder = nn.Sequential(*encoder_module_ls)
+        # l2 (the IWS default) has no parameters and keeps the original code paths
+        self.latent_norm = LatentNorm(
+            self.latent_norm_mode,
+            num_views=len(self.cfg.obs_keys),
+            channels_per_view=latent_ch // len(self.cfg.obs_keys),
+            rescale=self.latent_norm_rescale,
+        )
 
         # load previous trained model
         if self.load_ae is not None:
@@ -124,6 +136,17 @@ class LatentWorldModel(BasePytorchAlgo):
             cfg_path = f"{load_ae_dir}/.hydra/config.yaml"
             cfg_cp = OmegaConf.load(cfg_path)
             cfg_cp.load_ae = None
+            ae_norm = cfg_cp.algorithm.get("latent_norm", "l2")
+            ae_rescale = cfg_cp.algorithm.get("latent_norm_rescale", True)
+            if ae_norm != self.latent_norm_mode or (
+                self.latent_norm.learned and ae_rescale != self.latent_norm_rescale
+            ):
+                raise ValueError(
+                    f"load_ae was trained with latent_norm={ae_norm} "
+                    f"(rescale={ae_rescale}), but this run uses "
+                    f"latent_norm={self.latent_norm_mode} "
+                    f"(rescale={self.latent_norm_rescale})"
+                )
             diffae = LatentWorldModel.load_from_checkpoint(
                 self.load_ae,
                 cfg=cfg_cp.algorithm,
@@ -131,6 +154,7 @@ class LatentWorldModel(BasePytorchAlgo):
                 weights_only=False,
             )
             self.encoder.load_state_dict(diffae.encoder.state_dict())
+            self.latent_norm.load_state_dict(diffae.latent_norm.state_dict())
             if self.training_stage == 3:
                 self.dynamics.load_state_dict(diffae.dynamics.state_dict())
             self.decoder.load_state_dict(diffae.decoder.state_dict())
@@ -154,7 +178,11 @@ class LatentWorldModel(BasePytorchAlgo):
         if self.training_stage == 1:
             param_groups = [
                 {"params": self.decoder.parameters(), "lr": self.cfg.lr},
-                {"params": self.encoder.parameters(), "lr": self.cfg.lr},
+                {
+                    "params": list(self.encoder.parameters())
+                    + list(self.latent_norm.parameters()),
+                    "lr": self.cfg.lr,
+                },
             ]
         elif self.training_stage == 2:
             param_groups = [
@@ -214,6 +242,8 @@ class LatentWorldModel(BasePytorchAlgo):
             len(obs.shape) == 4
         ), f"Expected obs to have shape (B, C, H, W) but got {obs.shape}"
         z = self.encoder(obs)
+        if self.latent_norm_mode != "l2":
+            return self.latent_norm(z)
         num_views = len(self.obs_keys)
         c_per_v = z.shape[1] // num_views
         for i in range(num_views):
@@ -344,6 +374,9 @@ class LatentWorldModel(BasePytorchAlgo):
             # pbar.update(horizon)
 
         # normalization
+        if self.latent_norm_mode != "l2":
+            xs_pred = self.latent_norm.project(xs_pred)
+            return rearrange(xs_pred[T_hist:], "t b c h w -> b t c h w")
         num_views = len(self.obs_keys)
         c_per_v = xs_pred.shape[2] // num_views
         for i in range(num_views):

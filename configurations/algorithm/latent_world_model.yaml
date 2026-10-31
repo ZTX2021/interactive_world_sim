@@ -16,6 +16,10 @@ x_shape:
   - ${dataset.resolution}
   - ${dataset.resolution}
 norm_scale: 6.0
+# Latent normalization (latent_norm.py): l2 (IWS default), none, layernorm,
+# rmsnorm or groupnorm. rescale multiplies learned norms by 1/sqrt(channels).
+latent_norm: l2
+latent_norm_rescale: True
 num_latent_downsample: 2
 num_views: ${eval:'len(${dataset.obs_keys})'}
 num_latent_channel: ${eval:'4 * ${algorithm.num_views}'}
