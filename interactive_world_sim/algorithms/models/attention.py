@@ -93,6 +93,10 @@ class Attention(nn.Module):
             if q.is_cuda
             else self.cpu_backends
         )
+        # Flash Attention supports FP16/BF16 only. Keep FP32 inputs in their
+        # original precision and use math attention on Flash-only devices.
+        if q.is_cuda and q.dtype == torch.float32 and backends == [SDPBackend.FLASH_ATTENTION]:
+            backends = [SDPBackend.MATH]
         q, k, v = map(lambda t: t.contiguous(), (q, k, v))
 
         with sdpa_kernel(backends=backends):

@@ -46,6 +46,12 @@ evaluation). With fewer GPUs, each GPU runs its variants one after another.
    `WANDB_MODE=offline|online|disabled` (default offline; online logs to
    `charlesji/iws_norm_ablation`, or set `WANDB_ENTITY`).
 
+On A100, FP32 attention inputs use the math backend because Flash Attention
+requires FP16/BF16. Half-precision inputs retain the Flash backend; input
+precision and training settings are unchanged. Check backend selection and
+finite forward/backward passes with
+`python -m scripts.norm_ablation.check_attention_precision` on an idle A100.
+
 Rerunning the same command resumes after a crash or reboot: finished stages
 (`DONE` files) and evaluations are skipped, an unfinished stage resumes from
 its `last.ckpt`, and Lightning restores the elapsed training time. To restart
