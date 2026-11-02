@@ -9,6 +9,7 @@ and the `LICENSE` file to credit the author.
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 
 import hydra
@@ -51,10 +52,14 @@ def run_local(cfg: DictConfig) -> None:
     output_dir = Path(hydra_cfg.runtime.output_dir)
     if is_rank_zero:
         print(cyan("Outputs will be saved to:"), output_dir)
-        (output_dir.parents[1] / "latest-run").unlink(missing_ok=True)
-        (output_dir.parents[1] / "latest-run").symlink_to(
-            output_dir, target_is_directory=True
-        )
+        # Parallel variants share this convenience link. Publish atomically.
+        latest = output_dir.parents[1] / "latest-run"
+        temporary = latest.with_name(f".latest-run-{uuid.uuid4().hex}")
+        try:
+            temporary.symlink_to(output_dir, target_is_directory=True)
+            temporary.replace(latest)
+        finally:
+            temporary.unlink(missing_ok=True)
 
     # Set up logging with wandb.
     if cfg.wandb.mode != "disabled":

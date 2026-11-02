@@ -52,6 +52,10 @@ precision and training settings are unchanged. Check backend selection and
 finite forward/backward passes with
 `python -m scripts.norm_ablation.check_attention_precision` on an idle A100.
 
+Parallel runs publish the shared `latest-run` convenience symlink using an
+atomic replacement, so one variant cannot interrupt another during startup.
+This does not change checkpoint selection or training settings.
+
 Rerunning the same command resumes after a crash or reboot: finished stages
 (`DONE` files) and evaluations are skipped, an unfinished stage resumes from
 its `last.ckpt`, and Lightning restores the elapsed training time. To restart
